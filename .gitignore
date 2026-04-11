@@ -1,0 +1,28 @@
+# Python environment and cache
+venv-powerball/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Generated run outputs
+results_*/
+time_series_analysis/
+historical_prediction_analysis.png
+
+# Generated model and prediction artifacts
+enhanced_random_forest_predictions.csv
+enhanced_random_forest_bin_model.joblib
+fourier_bin_predictions.csv
+powerball_predictions.csv
+powerball_predictions_latest.csv
+historical_predictions.csv
+bin_predictions_visualization.png
+
+# Runtime/debug artifacts
+*.log
+*.tmp
