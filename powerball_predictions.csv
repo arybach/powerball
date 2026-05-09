@@ -1,0 +1,2 @@
+prediction_date,ball_1,ball_2,ball_3,ball_4,ball_5,powerball,sorted,model,device
+2026-05-09,10,21,32,45,55,15,"[10, 21, 32, 45, 55]",Fourier Series (n=15),cpu

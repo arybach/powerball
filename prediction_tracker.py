@@ -34,29 +34,31 @@ class PredictionTracker:
         else:
             self.history_df = pd.DataFrame(columns=[
                 'prediction_made_date', 'target_drawing_date', 'model_type',
-                'ball_1', 'ball_2', 'ball_3', 'ball_4', 'ball_5',
+                'ball_1', 'ball_2', 'ball_3', 'ball_4', 'ball_5', 'powerball',
                 'sorted_numbers', 'model_details', 'data_hash'
             ])
             print(f"✓ Created new prediction history tracker: {self.storage_file}")
     
-    def add_prediction(self, 
+    def add_prediction(self,
                       target_date: str,
                       model_type: str,
                       numbers: List[int],
                       model_details: Dict,
-                      data_hash: str = None):
+                      data_hash: str = None,
+                      powerball: Optional[int] = None):
         """
         Add a new prediction to the historical record.
-        
+
         Args:
             target_date: Date the prediction is for (YYYY-MM-DD)
             model_type: 'fourier' or 'random_forest'
-            numbers: List of 5 predicted numbers
+            numbers: List of 5 predicted white-ball numbers
             model_details: Dict with model-specific details
             data_hash: Hash of training data to detect data changes
+            powerball: Optional predicted red Powerball (1-26)
         """
         prediction_made = datetime.now()
-        
+
         new_prediction = {
             'prediction_made_date': prediction_made,
             'target_drawing_date': pd.to_datetime(target_date),
@@ -66,18 +68,19 @@ class PredictionTracker:
             'ball_3': numbers[2],
             'ball_4': numbers[3],
             'ball_5': numbers[4],
+            'powerball': powerball,
             'sorted_numbers': str(sorted(numbers)),
             'model_details': json.dumps(model_details),
             'data_hash': data_hash or "unknown"
         }
-        
-        # Add to DataFrame
+
         self.history_df = pd.concat([
-            self.history_df, 
+            self.history_df,
             pd.DataFrame([new_prediction])
         ], ignore_index=True)
-        
-        print(f"✓ Added {model_type} prediction for {target_date}: {numbers}")
+
+        pb_str = f" + PB {powerball}" if powerball is not None else ""
+        print(f"✓ Added {model_type} prediction for {target_date}: {numbers}{pb_str}")
     
     def save_history(self):
         """Save historical predictions to CSV."""

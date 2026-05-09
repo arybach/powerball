@@ -53,7 +53,7 @@ def download_and_parse_pdf(url: str) -> pd.DataFrame:
         r'(?:\s+X\d+)?'  # Optional multiplier
         r'\s+POWERBALL\s*$'  # Must end with POWERBALL (not POWERBALL DP)
     )
-    
+
     for line in text.split('\n'):
         line = line.strip()
         match = pattern.search(line)
@@ -61,7 +61,7 @@ def download_and_parse_pdf(url: str) -> pd.DataFrame:
             try:
                 date_str = match.group(1)
                 date_obj = pd.to_datetime(date_str, format='%m/%d/%y', errors='coerce')
-                
+
                 data.append({
                     'date': date_obj,
                     'ball_1': int(match.group(2)),
@@ -69,6 +69,7 @@ def download_and_parse_pdf(url: str) -> pd.DataFrame:
                     'ball_3': int(match.group(4)),
                     'ball_4': int(match.group(5)),
                     'ball_5': int(match.group(6)),
+                    'powerball': int(match.group(7)),
                 })
             except (ValueError, AttributeError) as e:
                 continue
@@ -209,33 +210,35 @@ def predict_next_numbers(df: pd.DataFrame, n_harmonics: int = 15) -> Dict:
     print(f"Last drawing: {last_date.strftime('%Y-%m-%d')}")
     print(f"Predicting for: {next_date.strftime('%Y-%m-%d')}")
     print(f"Using {n_harmonics} harmonics per ball")
-    
-    # Fit Fourier series for each ball
+
+    # Each entry: (column_name, valid_max). White balls 1-69, Powerball 1-26.
+    targets = [(f'ball_{i}', 69) for i in range(1, 6)] + [('powerball', 26)]
+
     predictions = {}
-    
-    for ball_num in range(1, 6):
-        col_name = f'ball_{ball_num}'
+
+    for col_name, valid_max in targets:
+        if col_name not in df.columns:
+            print(f"\n--- Skipping {col_name} (not present in data) ---")
+            continue
         y_train = df[col_name].values.astype(float)
-        
+
         print(f"\n--- Fitting {col_name} ---")
         model = FourierSeriesGPU(n_harmonics=n_harmonics, device=device)
         model.fit(x_train, y_train, lr=0.01, epochs=5000)
-        
-        # Predict next value
+
         y_next = model.predict(x_next)[0]
-        
-        # Clip to valid range (1-69 for white balls)
-        y_next_clipped = np.clip(np.round(y_next), 1, 69)
-        
+        y_next_clipped = np.clip(np.round(y_next), 1, valid_max)
+
         predictions[col_name] = {
             'raw_prediction': y_next,
             'clipped_prediction': int(y_next_clipped),
             'std_dev': df[col_name].std(),
             'mean': df[col_name].mean(),
+            'valid_max': valid_max,
         }
-        
-        print(f"Prediction: {y_next:.2f} -> {int(y_next_clipped)} (valid range: 1-69)")
-    
+
+        print(f"Prediction: {y_next:.2f} -> {int(y_next_clipped)} (valid range: 1-{valid_max})")
+
     return predictions, next_date
 
 
@@ -260,7 +263,10 @@ def main():
     
     # Show sample
     print("\n--- Sample Data (last 5 drawings) ---")
-    print(df[['date', 'ball_1', 'ball_2', 'ball_3', 'ball_4', 'ball_5']].tail())
+    sample_cols = ['date', 'ball_1', 'ball_2', 'ball_3', 'ball_4', 'ball_5']
+    if 'powerball' in df.columns:
+        sample_cols.append('powerball')
+    print(df[sample_cols].tail())
     
     # Predict next numbers
     predictions, next_date = predict_next_numbers(df, n_harmonics=15)
@@ -271,7 +277,7 @@ def main():
     print("="*70)
     print(f"Date: {next_date.strftime('%Y-%m-%d')}")
     print("\nWhite Balls:")
-    
+
     predicted_numbers = []
     for i in range(1, 6):
         pred = predictions[f'ball_{i}']
@@ -279,28 +285,35 @@ def main():
         print(f"  Ball {i}: {pred['clipped_prediction']:2d} "
               f"(raw: {pred['raw_prediction']:6.2f}, "
               f"historical mean: {pred['mean']:5.2f}, std: {pred['std_dev']:5.2f})")
-    
-    # Sort and check for duplicates
+
     predicted_numbers_sorted = sorted(predicted_numbers)
     print(f"\nSorted: {predicted_numbers_sorted}")
-    
+
     if len(set(predicted_numbers)) < 5:
         print("\n⚠ WARNING: Duplicate numbers detected!")
         print("Fourier series may not be ideal for this type of discrete prediction.")
         print("Consider using the predictions as guidance rather than exact values.")
-    
-    # Save predictions
-    pred_df = pd.DataFrame([{
+
+    powerball_pred = predictions.get('powerball')
+    if powerball_pred is not None:
+        print(f"\nPowerball: {powerball_pred['clipped_prediction']:2d} "
+              f"(raw: {powerball_pred['raw_prediction']:6.2f}, "
+              f"historical mean: {powerball_pred['mean']:5.2f}, "
+              f"std: {powerball_pred['std_dev']:5.2f})")
+
+    pred_row = {
         'prediction_date': next_date,
         'ball_1': predicted_numbers[0],
         'ball_2': predicted_numbers[1],
         'ball_3': predicted_numbers[2],
         'ball_4': predicted_numbers[3],
         'ball_5': predicted_numbers[4],
+        'powerball': powerball_pred['clipped_prediction'] if powerball_pred is not None else None,
         'sorted': str(predicted_numbers_sorted),
         'model': f'Fourier Series (n={15})',
         'device': str(device)
-    }])
+    }
+    pred_df = pd.DataFrame([pred_row])
     
     prediction_output = project_dir / 'powerball_predictions.csv'
     try:
@@ -335,7 +348,8 @@ def main():
             model_type='fourier',
             numbers=predicted_numbers,
             model_details=fourier_details,
-            data_hash=data_hash
+            data_hash=data_hash,
+            powerball=(powerball_pred['clipped_prediction'] if powerball_pred is not None else None)
         )
         
         tracker.save_history()
