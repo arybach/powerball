@@ -717,6 +717,44 @@ def main():
     print(f"✓ Enhanced predictions saved to enhanced_random_forest_predictions.csv")
 
     predictor.save_model(str(project_dir / 'enhanced_random_forest_bin_model.joblib'))
+
+    # Append to the rolling historical tracker so RF predictions accumulate
+    # alongside Fourier ones for over-time comparison vs actual draws.
+    try:
+        import sys
+        import hashlib
+        sys.path.append(str(project_dir))
+        from prediction_tracker import PredictionTracker
+
+        tracker = PredictionTracker(str(project_dir / 'historical_predictions.csv'))
+        data_hash = hashlib.md5(str(len(df)).encode()).hexdigest()[:8]
+
+        rf_details = {
+            'model_type': 'random_forest_bins',
+            'sequence_length': predictor.sequence_length,
+            'n_bins': predictor.bin_classifier.n_bins,
+            'use_gpu': predictor.use_gpu,
+            'data_points': len(df),
+            'bins_white': [bin_predictions[f'ball_{i}']['bin_prediction'] for i in range(1, 6)],
+            'bin_powerball': (bin_predictions['powerball']['bin_prediction']
+                              if 'powerball' in bin_predictions else None),
+            'confidence_white': [round(bin_predictions[f'ball_{i}']['confidence'], 4) for i in range(1, 6)],
+            'confidence_powerball': (round(bin_predictions['powerball']['confidence'], 4)
+                                     if 'powerball' in bin_predictions else None),
+        }
+
+        tracker.add_prediction(
+            target_date=prediction_date,
+            model_type='random_forest',
+            numbers=predicted_numbers,
+            model_details=rf_details,
+            data_hash=data_hash,
+            powerball=(powerball_pred['number_prediction'] if powerball_pred is not None else None),
+        )
+        tracker.save_history()
+        print(f"✓ Stored RF prediction in historical tracker")
+    except Exception as e:
+        print(f"⚠ Could not store RF prediction in historical tracker: {e}")
     
     print(f"\n" + "="*70)
     print("ENHANCED PREDICTION COMPLETE")

@@ -1,3 +1,4 @@
 prediction_made_date,target_drawing_date,model_type,ball_1,ball_2,ball_3,ball_4,ball_5,sorted_numbers,model_details,data_hash,powerball
 2026-05-09 08:30:19.569778,2026-05-09,fourier,11,21,32,44,56,"[11, 21, 32, 44, 56]","{""harmonics"": 15, ""device"": ""cpu"", ""model_type"": ""fourier_series"", ""data_points"": 2055}",9afefc52,
 2026-05-09 08:46:13.935145,2026-05-09,fourier,10,21,32,45,55,"[10, 21, 32, 45, 55]","{""harmonics"": 15, ""device"": ""cpu"", ""model_type"": ""fourier_series"", ""data_points"": 2055}",9afefc52,15.0
+2026-05-09 09:14:05.096912,2026-05-09,random_forest,35,23,29,61,66,"[23, 29, 35, 61, 66]","{""model_type"": ""random_forest_bins"", ""sequence_length"": 25, ""n_bins"": 6, ""use_gpu"": false, ""data_points"": 2055, ""bins_white"": [6, 4, 3, 6, 6], ""bin_powerball"": 4, ""confidence_white"": [0.2561, 0.2186, 0.1964, 0.3399, 0.3633], ""confidence_powerball"": 0.2303}",9afefc52,18.0
