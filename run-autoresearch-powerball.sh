@@ -19,11 +19,16 @@ ITERATIONS="${ITERATIONS:-30}"
 EVAL_DRAWS="${EVAL_DRAWS:-120}"
 SEED="${SEED:-42}"
 OBJECTIVES="${OBJECTIVES:-balanced,bin_focus}"
+HEAVY_ITERATIONS="${HEAVY_ITERATIONS:-12}"
+DEVICE="${DEVICE:-cuda}"
+MODELS="${MODELS:-fourier,random_forest,dirichlet,gradient_boosting,neural}"
 
 echo "Results directory: $RESULTS_DIR"
-echo "Iterations/model: $ITERATIONS"
+echo "Iterations/model: $ITERATIONS (heavy/GPU models: $HEAVY_ITERATIONS)"
 echo "Evaluation horizon: $EVAL_DRAWS"
 echo "Seed: $SEED"
+echo "Device: $DEVICE"
+echo "Models: $MODELS"
 echo "Objectives: $OBJECTIVES"
 echo ""
 
@@ -41,8 +46,11 @@ for objective in "${OBJECTIVE_ARRAY[@]}"; do
     python3 autoresearch_powerball.py \
         --data powerball_games_only.csv \
         --iterations "$ITERATIONS" \
+        --heavy-iterations "$HEAVY_ITERATIONS" \
         --eval-draws "$EVAL_DRAWS" \
         --seed "$SEED" \
+        --device "$DEVICE" \
+        --models "$MODELS" \
         --objective "$objective" \
         --output-dir "$objective_dir"
 done
@@ -62,10 +70,11 @@ for obj_dir in sorted([d for d in results_dir.iterdir() if d.is_dir()]):
         continue
     data = json.loads(cfg_file.read_text(encoding="utf-8"))
     objective = data.get("objective", obj_dir.name)
-    f = data["fourier"]["metrics"]
-    r = data["random_forest"]["metrics"]
-    rows.append((objective, "fourier", f["score"], f["mae"], f["bin_accuracy"], f["hits"]))
-    rows.append((objective, "random_forest", r["score"], r["mae"], r["bin_accuracy"], r["hits"]))
+    families = data.get("families", {})
+    for fam, info in families.items():
+        mtr = info.get("metrics", {})
+        rows.append((objective, fam, mtr.get("score", 0.0), mtr.get("mae", 0.0),
+                     mtr.get("bin_accuracy", 0.0), mtr.get("hits", 0.0)))
 
 rows.sort(key=lambda x: (x[1], x[2]))
 

@@ -34,6 +34,86 @@ except ImportError:
     GPU_AVAILABLE = False
     print("⚠ cuML not available, using CPU-only sklearn")
 
+# Optional gradient-boosting backend (XGBoost, GPU-accelerated).
+# Set env RF_BACKEND=xgboost to use XGBoost as a stronger drop-in for the
+# Random Forest; defaults to the original RandomForest behaviour.
+import os
+
+MODEL_BACKEND = os.environ.get("RF_BACKEND", "random_forest").lower()
+try:
+    import xgboost as xgb
+    from sklearn.preprocessing import LabelEncoder
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
+    if MODEL_BACKEND == "xgboost":
+        print("⚠ RF_BACKEND=xgboost requested but xgboost not installed; using Random Forest")
+        MODEL_BACKEND = "random_forest"
+
+# XGBoost uses the GPU automatically; detect CUDA independently of cuML.
+try:
+    import torch as _torch_probe
+    XGB_CUDA = bool(_torch_probe.cuda.is_available())
+except Exception:
+    XGB_CUDA = False
+
+
+class _XGBBinClassifier:
+    """sklearn-compatible XGBoost wrapper that label-encodes bin targets.
+
+    XGBoost's sklearn API requires contiguous 0-based class labels; the bin
+    labels here are ``1..n_bins`` and may skip values for a given ball. A
+    ``LabelEncoder`` makes this a true drop-in for ``RandomForestClassifier``.
+    """
+
+    def __init__(self, **params):
+        self.params = params
+        self.clf = None
+        self.le = None
+        self.classes_ = None
+
+    def fit(self, X, y):
+        self.le = LabelEncoder()
+        y_enc = self.le.fit_transform(y)
+        self.clf = xgb.XGBClassifier(**self.params)
+        self.clf.fit(X, y_enc)
+        self.classes_ = self.le.classes_
+        return self
+
+    def predict(self, X):
+        return self.le.inverse_transform(self.clf.predict(X))
+
+    def predict_proba(self, X):
+        return self.clf.predict_proba(X)
+
+
+def make_bin_classifier(n_estimators, max_depth, *, use_gpu=False, min_samples_split=2,
+                        max_features=None, random_state=42, learning_rate=0.1):
+    """Factory for the per-ball bin classifier.
+
+    Returns an XGBoost classifier (GPU when CUDA is available) when
+    RF_BACKEND=xgboost, otherwise the original cuML/sklearn Random Forest.
+    """
+    if MODEL_BACKEND == "xgboost" and XGB_AVAILABLE:
+        return _XGBBinClassifier(
+            n_estimators=n_estimators,
+            max_depth=min(max_depth, 12),  # boosted trees stay shallow
+            learning_rate=learning_rate,
+            subsample=0.9,
+            tree_method="hist",
+            device="cuda" if XGB_CUDA else "cpu",
+            random_state=random_state,
+            verbosity=0,
+        )
+    if use_gpu and GPU_AVAILABLE:
+        return CuMLRandomForestClassifier(
+            n_estimators=n_estimators, max_depth=max_depth, random_state=random_state)
+    kwargs = dict(n_estimators=n_estimators, max_depth=max_depth,
+                  min_samples_split=min_samples_split, random_state=random_state, n_jobs=-1)
+    if max_features is not None:
+        kwargs["max_features"] = max_features
+    return RandomForestClassifier(**kwargs)
+
 # PyTorch for GPU info
 try:
     import torch
@@ -288,20 +368,11 @@ class EnhancedGPURandomForestBinPredictor:
                         y_train, y_val = y[:split_idx], y[split_idx:]
                         
                         # Train quick model
-                        if self.use_gpu and len(X_train) > 100:
-                            model = CuMLRandomForestClassifier(
-                                n_estimators=50,
-                                max_depth=10,
-                                random_state=42
-                            )
-                        else:
-                            model = RandomForestClassifier(
-                                n_estimators=50,
-                                max_depth=10,
-                                random_state=42,
-                                n_jobs=-1
-                            )
-                        
+                        model = make_bin_classifier(
+                            n_estimators=50, max_depth=10,
+                            use_gpu=(self.use_gpu and len(X_train) > 100),
+                            random_state=42,
+                        )
                         model.fit(X_train, y_train)
                         predictions = model.predict(X_val)
                         score = accuracy_score(y_val, predictions)
@@ -383,25 +454,19 @@ class EnhancedGPURandomForestBinPredictor:
             print(f"Ball {ball_num} training data: {X_train.shape[0]} samples, {X_train.shape[1]} features")
             
             # Enhanced model configuration
-            if self.use_gpu:
-                model = CuMLRandomForestClassifier(
-                    n_estimators=300,  # More trees for better pattern capture
-                    max_depth=20,      # Deeper trees for complex patterns
-                    max_features='sqrt',
-                    min_samples_split=5,
-                    random_state=42
-                )
-                print("  Using GPU-accelerated cuML Random Forest")
+            model = make_bin_classifier(
+                n_estimators=300,  # More trees for better pattern capture
+                max_depth=20,      # Deeper trees (clamped for boosted backend)
+                use_gpu=self.use_gpu,
+                max_features='sqrt',
+                min_samples_split=5,
+                random_state=42,
+            )
+            if MODEL_BACKEND == "xgboost":
+                _on_gpu = XGB_AVAILABLE and XGB_CUDA
             else:
-                model = RandomForestClassifier(
-                    n_estimators=300,
-                    max_depth=20,
-                    max_features='sqrt',
-                    min_samples_split=5,
-                    random_state=42,
-                    n_jobs=-1
-                )
-                print("  Using CPU sklearn Random Forest")
+                _on_gpu = self.use_gpu and GPU_AVAILABLE
+            print(f"  Using {MODEL_BACKEND} backend (gpu={_on_gpu})")
             
             # Fit model
             model.fit(X_train, y_train)

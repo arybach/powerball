@@ -26,3 +26,6 @@ bin_predictions_visualization.png
 # Runtime/debug artifacts
 *.log
 *.tmp
+
+# Claude Code runtime
+.claude/

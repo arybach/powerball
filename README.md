@@ -3,9 +3,14 @@
 This repository is a Powerball data and modeling sandbox focused on:
 
 - Parsing official Florida Lottery Powerball PDFs into tabular data.
-- Running Fourier-based and Random-Forest-based prediction experiments.
+- Running a range of prediction experiments: Fourier series, Random Forest,
+  gradient boosting (XGBoost), Bayesian Dirichlet-multinomial, neural sequence
+  models (LSTM/GRU/Transformer), and a stacking ensemble.
 - Tracking and comparing model outputs over time.
 - Running autonomous experiment loops inspired by Karpathy's autoresearch pattern.
+- Evaluating every model **honestly** against baselines, a negative control,
+  calibration metrics, and bootstrap confidence bands — because for a fair
+  lottery the correct result is that nothing beats chance.
 
 ## Important Disclaimer
 
@@ -21,16 +26,27 @@ Lottery drawings are random events. These models do not provide a proven statist
   - predict_powerball_fourier_bins.py
   - run-fourier-prediction.sh
   - run-fourier-bin-prediction.sh
-- Random Forest modeling:
+- Tree modeling (Random Forest / Gradient Boosting):
   - predict_powerball_bins_gpu_enhanced.py
+    (set `RF_BACKEND=xgboost` to use GPU XGBoost as a stronger drop-in for the RF)
+- Additional model families (shared library):
+  - powerball_extra_models.py
+    - Bayesian Dirichlet-multinomial (`dirichlet`)
+    - Gradient boosting on lagged bins (`gradient_boosting`, GPU XGBoost)
+    - Neural sequence models LSTM / GRU / Transformer (`neural`, GPU torch)
+    - Marginal-frequency baseline and a probability-averaging stacking ensemble
+- Honest evaluation harness:
+  - evaluation_harness.py
 - Comparison and tracking:
   - prediction_tracker.py
   - run-prediction-comparison.sh
   - analyze-prediction-history.sh
   - plot_time_series.py
-- Autoresearch workflow:
+- Autoresearch workflow (spans all model families + ensemble):
   - autoresearch_powerball.py
   - run-autoresearch-powerball.sh
+- One-shot full pipeline:
+  - run-full-pipeline.sh
 
 ## Setup
 
@@ -68,10 +84,41 @@ source venv-powerball/bin/activate
 ./run-autoresearch-powerball.sh
 ```
 
-Optional runtime controls:
+The loop now tunes all model families — `fourier`, `random_forest`, `dirichlet`,
+`gradient_boosting`, `neural` — and adds a stacking `ensemble` of the per-family
+bests. Optional runtime controls:
 
 ```bash
-ITERATIONS=30 EVAL_DRAWS=10 OBJECTIVES=balanced,bin_focus ./run-autoresearch-powerball.sh
+# Subset of families, fewer GPU-model iterations, both objectives
+ITERATIONS=30 HEAVY_ITERATIONS=12 EVAL_DRAWS=120 \
+MODELS=fourier,dirichlet,gradient_boosting,neural \
+OBJECTIVES=balanced,bin_focus DEVICE=cuda ./run-autoresearch-powerball.sh
+```
+
+### 4) Honest evaluation (does anything beat chance?)
+
+```bash
+python3 evaluation_harness.py --data powerball_games_only.csv \
+    --eval-draws 200 --refit-every 10 --device cuda \
+    --best-configs results_*/balanced/autoresearch_best_configs.json \
+    --output-dir results_eval
+```
+
+This runs one unified walk-forward for every family **and** honest baselines
+(uniform-random and per-position marginal frequency), a shuffled-history
+**negative control**, calibration (Brier / log-loss), and bootstrap 95% CIs vs.
+the marginal baseline. It writes `EVALUATION_REPORT.md` + `evaluation_metrics.csv`.
+The expected (and observed) result for a fair lottery: **no model beats the
+marginal baseline** — the models re-derive the draw's structural marginals, not
+temporal signal.
+
+### 5) One-shot full pipeline
+
+Refresh data → all single-model predictions → autoresearch (all families, both
+objectives) → evaluation report, GPU-accelerated:
+
+```bash
+RF_BACKEND=xgboost DEVICE=cuda ./run-full-pipeline.sh
 ```
 
 ## Explicit Integration with Karpathy autoresearch program.md
@@ -108,8 +155,12 @@ Common generated artifacts include:
 - historical_predictions.csv
 - results_YYYYMMDD_HHMMSS/<objective>/autoresearch_results.tsv
 - results_YYYYMMDD_HHMMSS/<objective>/autoresearch_best_configs.json
+  (now keyed under `families.<family>` covering all model families + ensemble)
 - results_YYYYMMDD_HHMMSS/<objective>/autoresearch_predictions.csv
 - results_YYYYMMDD_HHMMSS/OBJECTIVE_COMPARISON.md
+- results_YYYYMMDD_HHMMSS/EVALUATION_REPORT.md (honest baseline comparison)
+- results_YYYYMMDD_HHMMSS/evaluation_metrics.csv
+- enhanced_random_forest_predictions.csv (tree model; XGBoost when RF_BACKEND=xgboost)
 
 ## Notes
 

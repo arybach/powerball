@@ -32,11 +32,24 @@ PDF_URL = "https://files.floridalottery.com/exptkt/pb.pdf"
 def download_and_parse_pdf(url: str) -> pd.DataFrame:
     """Download PDF and parse POWERBALL games only."""
     print(f"Downloading PDF from {url}...")
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        pdf_bytes = response.content
+    except requests.exceptions.SSLError as exc:
+        print(f"requests SSL handshake failed ({exc}); falling back to curl...")
+        import subprocess
+        result = subprocess.run(
+            ["curl", "-sS", "--fail", "-L", url], capture_output=True, timeout=60
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"curl fallback failed: {result.stderr.decode(errors='replace')}"
+            ) from exc
+        pdf_bytes = result.stdout
+
     # Extract text
-    pdf_file = io.BytesIO(response.content)
+    pdf_file = io.BytesIO(pdf_bytes)
     pdf_reader = PyPDF2.PdfReader(pdf_file)
     
     text = ""
