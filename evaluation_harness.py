@@ -48,6 +48,7 @@ from powerball_extra_models import (
     GradientBoostingModel,
     MarginalFrequencyModel,
     NeuralSequenceModel,
+    TimesFMModel,
 )
 
 WHITE = ar.WHITE_BALL_COLUMNS
@@ -138,6 +139,7 @@ def _builders(device: str, best_configs: Optional[Dict] = None) -> Dict[str, cal
         "dirichlet": lambda: DirichletModel(**merged("dirichlet", ar.BASELINES["dirichlet"])),
         "gradient_boosting": lambda: GradientBoostingModel(device=device, **merged("gradient_boosting", ar.BASELINES["gradient_boosting"])),
         "neural": lambda: NeuralSequenceModel(device=device, **merged("neural", ar.BASELINES["neural"])),
+        "timesfm": lambda: TimesFMModel(**merged("timesfm", ar.BASELINES.get("timesfm", {"n_bins": N_BINS, "context_len": 512}))),
     }
 
 
@@ -316,8 +318,8 @@ def _write_report(m: pd.DataFrame, df: pd.DataFrame, eval_draws: int, refit_ever
         "",
     ]
 
-    winners_hits = m[(m.family.isin(["fourier", "random_forest", "dirichlet", "gradient_boosting", "neural"])) & (m.beats_marginal_hits)]
-    winners_mae = m[(m.family.isin(["fourier", "random_forest", "dirichlet", "gradient_boosting", "neural"])) & (m.beats_marginal_mae)]
+    winners_hits = m[(m.family.isin(["fourier", "random_forest", "dirichlet", "gradient_boosting", "neural", "timesfm"])) & (m.beats_marginal_hits)]
+    winners_mae = m[(m.family.isin(["fourier", "random_forest", "dirichlet", "gradient_boosting", "neural", "timesfm"])) & (m.beats_marginal_mae)]
     if len(winners_hits) == 0 and len(winners_mae) == 0:
         lines += ["**Verdict: no model beats the marginal baseline at the 95% level on either "
                   "avg-hits or MAE.** This is the expected result for a fair lottery — the models "
@@ -386,7 +388,7 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--best-configs", default=None,
                    help="Optional autoresearch_best_configs.json to evaluate tuned configs")
-    p.add_argument("--families", default="uniform_baseline,marginal_baseline,fourier,random_forest,dirichlet,gradient_boosting,neural")
+    p.add_argument("--families", default="uniform_baseline,marginal_baseline,fourier,random_forest,dirichlet,gradient_boosting,neural,timesfm")
     p.add_argument("--output-dir", default=".")
     args = p.parse_args()
 

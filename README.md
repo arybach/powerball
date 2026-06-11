@@ -5,7 +5,8 @@ This repository is a Powerball data and modeling sandbox focused on:
 - Parsing official Florida Lottery Powerball PDFs into tabular data.
 - Running a range of prediction experiments: Fourier series, Random Forest,
   gradient boosting (XGBoost), Bayesian Dirichlet-multinomial, neural sequence
-  models (LSTM/GRU/Transformer), and a stacking ensemble.
+  models (LSTM/GRU/Transformer), the TimesFM 2.5 foundation forecaster, and a
+  stacking ensemble.
 - Tracking and comparing model outputs over time.
 - Running autonomous experiment loops inspired by Karpathy's autoresearch pattern.
 - Evaluating every model **honestly** against baselines, a negative control,
@@ -34,7 +35,10 @@ Lottery drawings are random events. These models do not provide a proven statist
     - Bayesian Dirichlet-multinomial (`dirichlet`)
     - Gradient boosting on lagged bins (`gradient_boosting`, GPU XGBoost)
     - Neural sequence models LSTM / GRU / Transformer (`neural`, GPU torch)
+    - TimesFM 2.5 200M foundation forecaster (`timesfm`, zero-shot, GPU)
     - Marginal-frequency baseline and a probability-averaging stacking ensemble
+- TimesFM standalone prediction:
+  - predict_powerball_timesfm.py
 - Honest evaluation harness:
   - evaluation_harness.py
 - Comparison and tracking:
@@ -166,3 +170,6 @@ Common generated artifacts include:
 
 - The repository currently keeps a local virtual environment folder (venv-powerball). Third-party package documentation files inside that environment are not project documentation.
 - Project documentation has been intentionally consolidated into this single README.md.
+- TimesFM weights are cached under a project-local `.hf_cache/` (gitignored); the
+  scripts set `HF_HOME` there automatically because the default `~/.cache/huggingface`
+  may be read-only. First run downloads ~0.8 GB from the Hugging Face Hub.

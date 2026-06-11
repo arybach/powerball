@@ -41,11 +41,14 @@ echo; echo "[2/5] Fourier (bins) prediction..."
 echo; echo "[2/5] Tree-bins prediction (backend=${RF_BACKEND:-random_forest})..."
 RF_BACKEND="${RF_BACKEND:-random_forest}" "$PY" predict_powerball_bins_gpu_enhanced.py
 
+echo; echo "[2/5] TimesFM 2.5 foundation-model prediction..."
+"$PY" predict_powerball_timesfm.py
+
 # 3) Autoresearch over all model families -----------------------------------
 echo; echo "[3/5] Autoresearch loop (all families, both objectives)..."
 ITERATIONS="${ITERATIONS:-20}" HEAVY_ITERATIONS="${HEAVY_ITERATIONS:-12}" \
 EVAL_DRAWS="${EVAL_DRAWS:-120}" OBJECTIVES="${OBJECTIVES:-balanced,bin_focus}" \
-SEED="$SEED" DEVICE="$DEVICE" MODELS="${MODELS:-fourier,random_forest,dirichlet,gradient_boosting,neural}" \
+SEED="$SEED" DEVICE="$DEVICE" MODELS="${MODELS:-fourier,random_forest,dirichlet,gradient_boosting,neural,timesfm}" \
     bash run-autoresearch-powerball.sh
 
 # run-autoresearch-powerball.sh creates its own results_* dir; capture the latest.

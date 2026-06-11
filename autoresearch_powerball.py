@@ -49,9 +49,12 @@ from powerball_extra_models import DirichletModel, make_model
 WHITE_BALL_COLUMNS = [f"ball_{i}" for i in range(1, 6)]
 
 # Families refit each step (expanding window) vs. trained once before the tail.
+# (TimesFM is zero-shot, so "train once" just stores context.)
 STEPWISE_MODELS = {"fourier", "random_forest", "dirichlet"}
-TRAINONCE_MODELS = {"gradient_boosting", "neural"}
+TRAINONCE_MODELS = {"gradient_boosting", "neural", "timesfm"}
 BASE_FAMILIES = ["fourier", "random_forest", "dirichlet", "gradient_boosting", "neural"]
+# timesfm is selectable via --models but kept out of the lightweight default.
+SELECTABLE_FAMILIES = BASE_FAMILIES + ["timesfm"]
 
 
 @dataclass
@@ -383,12 +386,21 @@ def mutate_neural_config(best: Dict, rng: np.random.Generator) -> Dict:
     return c
 
 
+def mutate_timesfm_config(best: Dict, rng: np.random.Generator) -> Dict:
+    # TimesFM is zero-shot; the only knobs are the bin scheme and context length.
+    c = dict(best)
+    c["context_len"] = int(rng.choice([256, 512, 1024, 2048]))
+    c["n_bins"] = int(np.clip(c["n_bins"] + rng.integers(-1, 2), 4, 10))
+    return c
+
+
 MUTATORS: Dict[str, Callable] = {
     "fourier": mutate_fourier_config,
     "random_forest": mutate_rf_config,
     "dirichlet": mutate_dirichlet_config,
     "gradient_boosting": mutate_gbm_config,
     "neural": mutate_neural_config,
+    "timesfm": mutate_timesfm_config,
 }
 
 BASELINES: Dict[str, Dict] = {
@@ -397,10 +409,11 @@ BASELINES: Dict[str, Dict] = {
     "dirichlet": {"n_bins": 6, "alpha_prior": 1.0, "recency_halflife": 0.0},
     "gradient_boosting": {"n_bins": 6, "seq_len": 15, "n_estimators": 200, "max_depth": 6, "learning_rate": 0.1, "subsample": 0.9},
     "neural": {"n_bins": 6, "seq_len": 20, "arch": "lstm", "hidden": 64, "layers": 1, "dropout": 0.1, "epochs": 60, "lr": 0.01},
+    "timesfm": {"n_bins": 6, "context_len": 512},
 }
 
 # Per-family RNG offsets so mutation streams differ but stay reproducible.
-_RNG_OFFSET = {"fourier": 11, "random_forest": 29, "dirichlet": 43, "gradient_boosting": 67, "neural": 89}
+_RNG_OFFSET = {"fourier": 11, "random_forest": 29, "dirichlet": 43, "gradient_boosting": 67, "neural": 89, "timesfm": 101}
 
 
 # --------------------------------------------------------------------------- #
@@ -551,7 +564,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--device", default="cuda", help="Torch/XGBoost device (cuda or cpu)")
     parser.add_argument("--models", default=",".join(BASE_FAMILIES),
-                        help="Comma-separated subset of: " + ", ".join(BASE_FAMILIES))
+                        help="Comma-separated subset of: " + ", ".join(SELECTABLE_FAMILIES))
     parser.add_argument("--no-ensemble", action="store_true", help="Skip the stacking ensemble")
     parser.add_argument(
         "--objective", default="balanced", choices=["balanced", "bin_focus"],
@@ -563,7 +576,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     families = [f.strip() for f in args.models.split(",") if f.strip()]
-    unknown = [f for f in families if f not in BASE_FAMILIES]
+    unknown = [f for f in families if f not in SELECTABLE_FAMILIES]
     if unknown:
         raise ValueError(f"Unknown model families: {unknown}")
     heavy_iters = args.heavy_iterations if args.heavy_iterations is not None else max(5, args.iterations // 2)

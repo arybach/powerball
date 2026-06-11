@@ -30,6 +30,7 @@ corresponding family).
 
 from __future__ import annotations
 
+import os
 import warnings
 from typing import Dict, List, Optional, Sequence
 
@@ -37,6 +38,12 @@ import numpy as np
 
 # XGBoost emits a one-time device-mismatch UserWarning on tiny inputs; harmless.
 warnings.filterwarnings("ignore", message=".*mismatched devices.*")
+
+# Keep large model weights (e.g. TimesFM) in a writable, project-local HF cache
+# (the default ~/.cache/huggingface may be read-only in this environment).
+os.environ.setdefault(
+    "HF_HOME", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".hf_cache")
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -388,12 +395,106 @@ class EnsembleModel:
         return _expected_bin(self.predict_proba(context))
 
 
+# --------------------------------------------------------------------------- #
+# TimesFM 2.5 foundation forecaster (google/timesfm-2.5-200m-pytorch)
+# --------------------------------------------------------------------------- #
+_TIMESFM_CACHE: Dict[int, object] = {}
+
+
+def get_timesfm(max_context: int = 2048, max_horizon: int = 16):
+    """Load and compile the TimesFM 2.5 200M model once, then reuse it.
+
+    Zero-shot foundation forecaster -- no fitting required. Cached per
+    ``max_context`` so repeated calls are cheap. Raises ImportError if the
+    ``timesfm`` package is unavailable.
+    """
+    key = int(max_context)
+    if key not in _TIMESFM_CACHE:
+        import timesfm
+
+        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+            "google/timesfm-2.5-200m-pytorch"
+        )
+        model.compile(
+            timesfm.ForecastConfig(
+                max_context=int(max_context),
+                max_horizon=int(max_horizon),
+                normalize_inputs=True,
+                use_continuous_quantile_head=True,
+                force_flip_invariance=True,
+                infer_is_positive=True,
+                fix_quantile_crossing=True,
+            )
+        )
+        _TIMESFM_CACHE[key] = model
+    return _TIMESFM_CACHE[key]
+
+
+def timesfm_forecast(series_list: List[np.ndarray], horizon: int = 1, max_context: int = 2048):
+    """Batched next-step forecast for several univariate series.
+
+    Returns ``(point, quantiles)`` where ``point`` is (n_series, horizon) and
+    ``quantiles`` is (n_series, horizon, 10): index 0 is the mean, 1..9 are the
+    0.1..0.9 deciles (in the series' own value space).
+    """
+    model = get_timesfm(max_context=max_context, max_horizon=max(horizon, 16))
+    inputs = [np.asarray(s, dtype=float) for s in series_list]
+    return model.forecast(horizon=horizon, inputs=inputs)
+
+
+class TimesFMModel:
+    """Per-position adapter for TimesFM on a single ball's *bin* series.
+
+    Forecasts the next bin value zero-shot; ``predict_proba`` turns the model's
+    decile forecast into a histogram over bins ``1..n_bins`` (wide deciles ->
+    diffuse distribution, which is the honest outcome on i.i.d. lottery data).
+    """
+
+    def __init__(self, n_bins: int = 6, context_len: int = 512, max_context: int = 2048,
+                 smoothing: float = 0.25, **_ignored):
+        self.n_bins = int(n_bins)
+        self.context_len = int(context_len)
+        self.max_context = int(max_context)
+        self.smoothing = float(smoothing)
+        self._series = np.array([float((self.n_bins + 1) / 2)])
+        self._cache_key = None
+        self._cache_val = None
+
+    def fit(self, series_bins: Sequence[int]) -> "TimesFMModel":
+        self._series = np.asarray(series_bins, dtype=float)
+        self._cache_key = None
+        return self
+
+    def _run(self, context: Optional[Sequence[int]]):
+        s = self._series if context is None else np.asarray(context, dtype=float)
+        s = s[-self.context_len :]
+        key = (len(s), float(s[-1]) if len(s) else 0.0)
+        if key == self._cache_key:
+            return self._cache_val
+        pf, qf = timesfm_forecast([s], horizon=1, max_context=self.max_context)
+        point = float(pf[0, 0])
+        deciles = np.asarray(qf[0, 0, 1:], dtype=float)  # 9 deciles in bin space
+        samples = np.clip(np.round(deciles), 1, self.n_bins).astype(int)
+        counts = np.bincount(samples, minlength=self.n_bins + 1)[1 : self.n_bins + 1].astype(float)
+        counts += self.smoothing
+        proba = counts / counts.sum()
+        self._cache_key, self._cache_val = key, (point, proba)
+        return self._cache_val
+
+    def predict_proba(self, context: Optional[Sequence[int]] = None) -> np.ndarray:
+        return self._run(context)[1]
+
+    def predict_point(self, context: Optional[Sequence[int]] = None) -> float:
+        return float(np.clip(self._run(context)[0], 1, self.n_bins))
+
+
 # Registry of constructors keyed by the model-family name used across the project.
 MODEL_REGISTRY = {
     "marginal": MarginalFrequencyModel,
     "dirichlet": DirichletModel,
     "gradient_boosting": GradientBoostingModel,
     "neural": NeuralSequenceModel,
+    "timesfm": TimesFMModel,
 }
 
 
