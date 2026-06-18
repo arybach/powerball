@@ -1,369 +1,189 @@
 #!/usr/bin/env python3
 """
-Bokeh visualization script for Powerball data and predictions.
-Creates interactive charts including:
-- Time series of sum_white_balls
-- Frequency bar charts for white balls (1-69) and powerball (1-26)
-- Comparison panel of latest predictions
+Interactive Bokeh BACKTEST report for the Powerball models.
+
+This visualizes how well the Fourier and Random-Forest models *predict actual draws*,
+using the project's existing walk-forward backtest engine
+(``plot_time_series.PowerballTimeSeriesPlotter``): the last ``PREDICTION_DAYS`` of drawings
+are held out, each is predicted from the data available before it, and the prediction is
+compared to the number that was actually drawn.
+
+It produces a single self-contained ``powerball_results.html`` with:
+  1. Per-ball "actual vs predicted" series (Fourier & RF) with hover + absolute error.
+  2. A grouped MAE bar chart (mean absolute error per ball, per model) — lower is better.
+  3. An absolute-error heatmap (ball x held-out draw) per model.
+  4. A summary panel: overall MAE, exact-match count, and within-5 hit-rate per model.
+
+Frequency-of-numbers / sum-over-time charts are intentionally omitted: the draws are
+random, so only backtest accuracy says anything about the models.
+
+Run with the project venv (needs torch/sklearn for the models, plus bokeh):
+    ./venv-powerball/bin/python visualize_powerball_bokeh.py
 """
 
+from __future__ import annotations
+
+import numpy as np
 import pandas as pd
 from bokeh.io import output_file, save
-from bokeh.layouts import column, row
+from bokeh.layouts import column
+from bokeh.models import (
+    ColumnDataSource,
+    Div,
+    HoverTool,
+    LinearColorMapper,
+    ColorBar,
+    FactorRange,
+)
+from bokeh.palettes import RdYlBu11
 from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, Legend
+from bokeh.transform import dodge
+
+from plot_time_series import PowerballTimeSeriesPlotter
+
+PREDICTION_DAYS = 60
+OUT = "powerball_results.html"
+BALLS = [f"ball_{i}" for i in range(1, 6)]
+MODELS = [("Fourier", "fourier", "#e6550d"), ("RandomForest", "rf", "#31a354")]
 
 
-def load_data():
-    """Load all Powerball data and prediction CSV files."""
-    data = pd.read_csv("powerball_data.csv")
-    predictions = pd.read_csv("powerball_predictions.csv")
-    enhanced_predictions = pd.read_csv("enhanced_random_forest_predictions.csv")
-    historical_predictions = pd.read_csv("historical_predictions.csv")
-    return data, predictions, enhanced_predictions, historical_predictions
+def build_backtest_frame() -> pd.DataFrame:
+    """Run the walk-forward backtest and return one row per held-out draw with the
+    actual numbers plus each model's predicted numbers."""
+    plotter = PowerballTimeSeriesPlotter("powerball_games_only.csv")
+    fourier = plotter.create_fourier_predictions_series(prediction_days=PREDICTION_DAYS)
+    rf = plotter.create_bin_predictions_series(prediction_days=PREDICTION_DAYS)
+
+    actual = plotter.df[["date", *BALLS]].copy()
+    df = actual[actual["date"] > actual["date"].max() - pd.Timedelta(days=PREDICTION_DAYS)]
+    df = df.sort_values("date").reset_index(drop=True)
+
+    if fourier is not None:
+        df = df.merge(fourier, on="date", how="left")
+    if rf is not None:
+        df = df.merge(rf, on="date", how="left")
+
+    # Per-model absolute error per ball (only where predictions exist).
+    for _, key, _ in MODELS:
+        for b in BALLS:
+            pcol = f"{b}_{key}_pred"
+            if pcol in df.columns:
+                df[f"{b}_{key}_err"] = (df[b] - df[pcol]).abs()
+    return df
 
 
-def create_time_series_plot(data):
-    """Create time series plot of sum_white_balls."""
-    # Sort by date for proper time series
-    data_sorted = data.sort_values("date").reset_index(drop=True)
-    
-    source = ColumnDataSource(data_sorted)
-    
-    p = figure(
-        width=800,
-        height=400,
-        title="Powerball White Balls Sum Over Time",
-        x_axis_type="datetime",
-        x_axis_label="Date",
-        y_axis_label="Sum of White Balls",
-    )
-    
-    p.line(
-        "date",
-        "sum_white_balls",
-        source=source,
-        line_width=2,
-        color="blue",
-        legend_label="Sum",
-    )
-    p.circle(
-        "date",
-        "sum_white_balls",
-        source=source,
-        size=4,
-        color="blue",
-        alpha=0.6,
-    )
-    
-    p.add_tools(
-        HoverTool(
-            tooltips=[
-                ("Date", "@date"),
-                ("Sum", "@sum_white_balls"),
-                ("Ball 1", "@ball_1"),
-                ("Ball 2", "@ball_2"),
-                ("Ball 3", "@ball_3"),
-                ("Ball 4", "@ball_4"),
-                ("Ball 5", "@ball_5"),
-            ]
-        )
-    )
-    
-    p.legend.location = "top_left"
-    p.grid.grid_line_alpha = 0.3
-    
+def per_ball_figures(df: pd.DataFrame) -> list:
+    figs = []
+    for b in BALLS:
+        src = ColumnDataSource(dict(
+            date=df["date"],
+            actual=df[b],
+            fourier=df.get(f"{b}_fourier_pred"),
+            rf=df.get(f"{b}_rf_pred"),
+        ))
+        p = figure(title=f"{b}: actual vs predicted (last {PREDICTION_DAYS} days)",
+                   x_axis_type="datetime", height=240, width=1100,
+                   tools="pan,box_zoom,wheel_zoom,reset,save", toolbar_location="right")
+        p.line("date", "actual", source=src, color="#222222", line_width=2, legend_label="actual")
+        p.scatter("date", "actual", source=src, color="#222222", size=6)
+        if f"{b}_fourier_pred" in df.columns:
+            p.scatter("date", "fourier", source=src, color="#e6550d", size=8,
+                      marker="triangle", legend_label="Fourier")
+        if f"{b}_rf_pred" in df.columns:
+            p.scatter("date", "rf", source=src, color="#31a354", size=8,
+                      marker="square", legend_label="RandomForest")
+        p.add_tools(HoverTool(tooltips=[("date", "@date{%F}"), ("actual", "@actual"),
+                                        ("Fourier", "@fourier"), ("RF", "@rf")],
+                              formatters={"@date": "datetime"}, mode="vline"))
+        p.legend.location = "top_left"
+        p.legend.click_policy = "hide"
+        p.yaxis.axis_label = "number"
+        figs.append(p)
+    return figs
+
+
+def mae_bar(df: pd.DataFrame):
+    x = BALLS
+    p = figure(x_range=FactorRange(*x), title="Mean Absolute Error per ball (lower = better)",
+               height=320, width=560, tools="save", toolbar_location=None)
+    offsets = {"fourier": -0.17, "rf": 0.17}
+    for name, key, color in MODELS:
+        errs = [float(df[f"{b}_{key}_err"].mean()) if f"{b}_{key}_err" in df.columns else 0.0
+                for b in x]
+        src = ColumnDataSource(dict(balls=x, mae=errs))
+        p.vbar(x=dodge("balls", offsets[key], range=p.x_range), top="mae", width=0.3,
+               source=src, color=color, legend_label=name)
+    p.add_tools(HoverTool(tooltips=[("ball", "@balls"), ("MAE", "@mae{0.00}")]))
+    p.y_range.start = 0
+    p.yaxis.axis_label = "MAE"
+    p.legend.location = "top_right"
     return p
 
 
-def create_white_ball_frequency_plot(data):
-    """Create frequency bar chart for white balls (1-69)."""
-    # Count frequency of each white ball (ball_1 through ball_5)
-    all_white_balls = []
-    for col in ["ball_1", "ball_2", "ball_3", "ball_4", "ball_5"]:
-        all_white_balls.extend(data[col].tolist())
-    
-    # Count frequencies for balls 1-69
-    freq = {i: 0 for i in range(1, 70)}
-    for ball in all_white_balls:
-        if ball in freq:
-            freq[ball] += 1
-    
-    balls = list(freq.keys())
-    counts = list(freq.values())
-    
-    source = ColumnDataSource(data=dict(balls=balls, counts=counts))
-    
-    p = figure(
-        width=800,
-        height=400,
-        title="White Ball Frequency (1-69)",
-        x_axis_label="Ball Number",
-        y_axis_label="Frequency",
-        x_range=[1, 69],
-    )
-    
-    p.vbar(
-        x="balls",
-        top="counts",
-        width=0.8,
-        source=source,
-        color="navy",
-        alpha=0.7,
-    )
-    
-    p.add_tools(
-        HoverTool(
-            tooltips=[("Ball", "@balls"), ("Frequency", "@counts")]
-        )
-    )
-    
-    p.grid.grid_line_alpha = 0.3
-    p.xaxis.major_label_orientation = 0.5
-    
-    return p
+def error_heatmaps(df: pd.DataFrame) -> list:
+    figs = []
+    dates = [d.strftime("%m-%d") for d in df["date"]]
+    mapper = LinearColorMapper(palette=list(reversed(RdYlBu11)), low=0, high=35)
+    for name, key, _ in MODELS:
+        cols = [f"{b}_{key}_err" for b in BALLS]
+        if not all(c in df.columns for c in cols):
+            continue
+        xs, ys, vals = [], [], []
+        for b in BALLS:
+            for di, d in enumerate(dates):
+                xs.append(d); ys.append(b); vals.append(float(df[f"{b}_{key}_err"].iloc[di]))
+        src = ColumnDataSource(dict(x=xs, y=ys, val=vals))
+        p = figure(title=f"{name}: |actual - predicted| heatmap", x_range=dates,
+                   y_range=list(reversed(BALLS)), height=300, width=1100,
+                   tools="save", toolbar_location=None)
+        p.rect("x", "y", width=1, height=1, source=src,
+               fill_color={"field": "val", "transform": mapper}, line_color=None)
+        p.add_tools(HoverTool(tooltips=[("draw", "@x"), ("ball", "@y"), ("|err|", "@val{0.0}")]))
+        p.add_layout(ColorBar(color_mapper=mapper, title="abs error"), "right")
+        p.xaxis.major_label_orientation = 1.0
+        figs.append(p)
+    return figs
 
 
-def create_powerball_frequency_plot(data):
-    """Create frequency bar chart for powerball (1-26)."""
-    # Count frequency of powerball
-    freq = {i: 0 for i in range(1, 27)}
-    for pb in data["powerball"]:
-        if pd.notna(pb) and pb != "X" and str(pb).strip():
-            try:
-                pb_int = int(float(pb)) if isinstance(pb, str) else int(pb)
-                if pb_int in freq:
-                    freq[pb_int] += 1
-            except (ValueError, TypeError):
-                pass
-    
-    balls = list(freq.keys())
-    counts = list(freq.values())
-    
-    source = ColumnDataSource(data=dict(balls=balls, counts=counts))
-    
-    p = figure(
-        width=800,
-        height=400,
-        title="Powerball Frequency (1-26)",
-        x_axis_label="Powerball Number",
-        y_axis_label="Frequency",
-        x_range=[1, 26],
+def summary_div(df: pd.DataFrame) -> Div:
+    rows = []
+    n = len(df)
+    for name, key, _ in MODELS:
+        cols = [f"{b}_{key}_err" for b in BALLS]
+        if not all(c in df.columns for c in cols):
+            rows.append(f"<tr><td>{name}</td><td colspan=3>no predictions generated</td></tr>")
+            continue
+        allerr = pd.concat([df[c] for c in cols])
+        mae = allerr.mean()
+        exact = int((allerr == 0).sum())
+        within5 = float((allerr <= 5).mean()) * 100
+        rows.append(f"<tr><td>{name}</td><td>{mae:.2f}</td>"
+                    f"<td>{exact} / {n * 5}</td><td>{within5:.1f}%</td></tr>")
+    html = (
+        f"<h1 style='font-family:sans-serif'>Powerball model backtest</h1>"
+        f"<p style='font-family:sans-serif;color:#555;max-width:1080px'>Walk-forward backtest over "
+        f"the last {PREDICTION_DAYS} days ({n} held-out draws). Each draw is predicted from the data "
+        f"available before it, then compared to the number actually drawn. Powerball is random, so "
+        f"errors are expected to be large &mdash; the point is to <i>compare the two models</i>, not "
+        f"to beat the lottery.</p>"
+        f"<table style='font-family:sans-serif;border-collapse:collapse' border='1' cellpadding='6'>"
+        f"<tr style='background:#eee'><th>model</th><th>overall MAE</th>"
+        f"<th>exact matches</th><th>within-5 hit rate</th></tr>{''.join(rows)}</table>"
     )
-    
-    p.vbar(
-        x="balls",
-        top="counts",
-        width=0.8,
-        source=source,
-        color="red",
-        alpha=0.7,
-    )
-    
-    p.add_tools(
-        HoverTool(
-            tooltips=[("Powerball", "@balls"), ("Frequency", "@counts")]
-        )
-    )
-    
-    p.grid.grid_line_alpha = 0.3
-    p.xaxis.major_label_orientation = 0.5
-    
-    return p
-
-
-def create_predictions_comparison_panel(predictions, enhanced_predictions, historical_predictions):
-    """Create a comparison panel showing latest predictions from different models."""
-    
-    # Prepare data for display
-    pred_data = []
-    
-    # Add Fourier predictions
-    if len(predictions) > 0:
-        row_data = {
-            "Model": predictions.iloc[0]["model"],
-            "Ball 1": predictions.iloc[0]["ball_1"],
-            "Ball 2": predictions.iloc[0]["ball_2"],
-            "Ball 3": predictions.iloc[0]["ball_3"],
-            "Ball 4": predictions.iloc[0]["ball_4"],
-            "Ball 5": predictions.iloc[0]["ball_5"],
-            "Powerball": predictions.iloc[0]["powerball"],
-            "Device": predictions.iloc[0]["device"],
-        }
-        pred_data.append(row_data)
-    
-    # Add Enhanced Random Forest predictions
-    if len(enhanced_predictions) > 0:
-        row_data = {
-            "Model": enhanced_predictions.iloc[0]["model"],
-            "Ball 1": enhanced_predictions.iloc[0]["ball_1"],
-            "Ball 2": enhanced_predictions.iloc[0]["ball_2"],
-            "Ball 3": enhanced_predictions.iloc[0]["ball_3"],
-            "Ball 4": enhanced_predictions.iloc[0]["ball_4"],
-            "Ball 5": enhanced_predictions.iloc[0]["ball_5"],
-            "Powerball": enhanced_predictions.iloc[0]["powerball"],
-            "Device": "CPU" if not enhanced_predictions.iloc[0].get("use_gpu", False) else "GPU",
-        }
-        pred_data.append(row_data)
-    
-    # Add latest historical prediction
-    if len(historical_predictions) > 0:
-        latest_hist = historical_predictions.iloc[-1]
-        row_data = {
-            "Model": latest_hist["model_type"].upper(),
-            "Ball 1": latest_hist["ball_1"],
-            "Ball 2": latest_hist["ball_2"],
-            "Ball 3": latest_hist["ball_3"],
-            "Ball 4": latest_hist["ball_4"],
-            "Ball 5": latest_hist["ball_5"],
-            "Powerball": latest_hist.get("powerball", "N/A"),
-            "Device": "N/A",
-        }
-        pred_data.append(row_data)
-    
-    # Create a simple table-like visualization
-    if not pred_data:
-        return None
-    
-    # Create a figure for the predictions table
-    p = figure(
-        width=800,
-        height=350,
-        title="Latest Predictions Comparison",
-        toolbar_location=None,
-        x_range=[0, 7],
-        y_range=[0, len(pred_data)],
-    )
-    
-    # Draw grid background
-    p.grid.grid_line_color = "#e0e0e0"
-    p.grid.grid_line_alpha = 0.5
-    
-    # Labels for columns
-    headers = ["Model", "Ball 1", "Ball 2", "Ball 3", "Ball 4", "Ball 5", "Powerball", "Device"]
-    for i, header in enumerate(headers):
-        p.text(
-            x=i + 0.5,
-            y=len(pred_data) + 0.3,
-            text=[header],
-            text_font_size="11px",
-            text_font_style="bold",
-            text_color="black",
-        )
-    
-    # Draw prediction rows
-    colors = ["#f0f0f0", "#e8e8e8", "#e0e0e0"]
-    for i, row_data in enumerate(pred_data):
-        y_pos = len(pred_data) - i - 0.5
-        bg_color = colors[i % len(colors)]
-        
-        # Draw background rectangle for row
-        p.rect(
-            x=3.5,
-            y=y_pos,
-            width=7,
-            height=0.85,
-            fill_color=bg_color,
-            line_color="#d0d0d0",
-            line_width=1,
-        )
-        
-        # Add text for each column
-        p.text(
-            x=0.5,
-            y=y_pos,
-            text=[row_data["Model"]],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=1.5,
-            y=y_pos,
-            text=[str(row_data["Ball 1"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=2.5,
-            y=y_pos,
-            text=[str(row_data["Ball 2"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=3.5,
-            y=y_pos,
-            text=[str(row_data["Ball 3"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=4.5,
-            y=y_pos,
-            text=[str(row_data["Ball 4"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=5.5,
-            y=y_pos,
-            text=[str(row_data["Ball 5"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=6.5,
-            y=y_pos,
-            text=[str(row_data["Powerball"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-        p.text(
-            x=7.5,
-            y=y_pos,
-            text=[str(row_data["Device"])],
-            text_font_size="10px",
-            text_color="black",
-        )
-    
-    p.axis.visible = False
-    p.grid.visible = False
-    
-    return p
+    return Div(text=html, width=1100)
 
 
 def main():
-    """Main function to create and save all visualizations."""
-    # Load data
-    data, predictions, enhanced_predictions, historical_predictions = load_data()
-    
-    # Set output file
-    output_file("powerball_results.html")
-    
-    # Create all plots
-    time_series_plot = create_time_series_plot(data)
-    white_ball_freq = create_white_ball_frequency_plot(data)
-    powerball_freq = create_powerball_frequency_plot(data)
-    predictions_panel = create_predictions_comparison_panel(
-        predictions, enhanced_predictions, historical_predictions
-    )
-    
-    # Arrange plots in layout
-    # Top: time series
-    # Middle: frequency charts side by side
-    # Bottom: predictions comparison
+    df = build_backtest_frame()
     layout = column(
-        time_series_plot,
-        row(white_ball_freq, powerball_freq),
+        summary_div(df),
+        mae_bar(df),
+        *per_ball_figures(df),
+        *error_heatmaps(df),
     )
-    
-    if predictions_panel:
-        layout.children.append(predictions_panel)
-    
-    # Save the layout
+    output_file(OUT, title="Powerball Model Backtest", mode="inline")
     save(layout)
-    
-    print("Visualization saved to powerball_results.html")
+    print(f"Wrote {OUT} ({len(df)} held-out draws backtested)")
 
 
 if __name__ == "__main__":

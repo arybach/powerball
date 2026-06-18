@@ -31,3 +31,6 @@ powerball_predictions_latest.csv
 # Runtime/debug artifacts
 *.log
 *.tmp
+
+# sidekick orchestrator run state
+.sidekick-selfhosted/
