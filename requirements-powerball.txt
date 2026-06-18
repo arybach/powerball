@@ -8,7 +8,17 @@ torch>=2.0.0
 joblib>=1.3.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
-# GPU acceleration (optional - install via conda or pip)
-# cuml-cu11>=23.0.0  # For RAPIDS cuML GPU Random Forest
-# cudf-cu11>=23.0.0  # For RAPIDS cuDF GPU DataFrames
+# Interactive Bokeh backtest report (visualize_powerball_bokeh.py)
 bokeh
+# Gradient boosting model families (XGBoost GPU-accelerated drop-in for RF)
+xgboost>=2.0.0
+lightgbm>=4.0.0
+# TimesFM 2.5 foundation time-series model (google/timesfm-2.5-200m-pytorch)
+timesfm>=2.0.0
+# GPU acceleration notes:
+#   torch: for an NVIDIA GPU install a CUDA build, e.g.
+#     pip install torch --index-url https://download.pytorch.org/whl/cu128
+#   xgboost uses the GPU automatically via device="cuda".
+# RAPIDS cuML (optional, alternative GPU Random Forest):
+# cuml-cu11>=23.0.0
+# cudf-cu11>=23.0.0

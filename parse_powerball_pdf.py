@@ -19,12 +19,32 @@ PDF_URL = "https://files.floridalottery.com/exptkt/pb.pdf"
 
 
 def download_pdf(url: str) -> bytes:
-    """Download PDF from URL."""
+    """Download PDF from URL.
+
+    Uses requests first; if the TLS handshake fails (the Florida Lottery host
+    negotiates a legacy TLS configuration that some OpenSSL builds reject),
+    falls back to the system ``curl`` binary, which handles it cleanly.
+    """
     print(f"Downloading PDF from {url}...")
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    print(f"Downloaded {len(response.content)} bytes")
-    return response.content
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        print(f"Downloaded {len(response.content)} bytes")
+        return response.content
+    except requests.exceptions.SSLError as exc:
+        print(f"requests SSL handshake failed ({exc}); falling back to curl...")
+        import subprocess
+        result = subprocess.run(
+            ["curl", "-sS", "--fail", "-L", url],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"curl fallback failed: {result.stderr.decode(errors='replace')}"
+            ) from exc
+        print(f"Downloaded {len(result.stdout)} bytes via curl")
+        return result.stdout
 
 
 def extract_text_from_pdf(pdf_content: bytes) -> str:
