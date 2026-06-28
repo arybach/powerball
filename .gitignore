@@ -36,8 +36,12 @@ powerball_predictions_latest.csv
 .sidekick-selfhosted/
 
 # Claude Code runtime
-.claude/
 
 # HuggingFace model cache (TimesFM weights)
 .hf_cache/
 timesfm_predictions.csv
+
+# Claude Code
+.claude/settings.local.json
+.claude/transcripts/
+.claude/sessions/
